@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "340707129697",
+    "firebase_url": "https://hitup-fc62d-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "hitup-fc62d",
+    "storage_bucket": "hitup-fc62d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:340707129697:android:93a200d5ba2ee8d511ad20",
+        "android_client_info": {
+          "package_name": "hitupchat.com"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "340707129697-dmqdqg77442j0m35ost7sajb8uo9954v.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBRgd6wzdXKwflB8LVygD8A7fuJkokYwfg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "340707129697-dmqdqg77442j0m35ost7sajb8uo9954v.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "340707129697-iic825blcq33dt6se3fhsld3hr9lk5gb.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.hitupChat"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
