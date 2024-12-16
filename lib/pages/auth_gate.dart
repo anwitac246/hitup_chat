@@ -4,18 +4,18 @@ import 'package:flutter/material.dart';
 import 'package:hitup_chat/pages/chat.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:hitup_chat/firebase_options.dart';
-import 'package:firebase_database/firebase_database.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:hitup_chat/pages/profile.dart';
 
 class AuthGate extends StatelessWidget {
   const AuthGate({super.key});
 
   Future<void> _checkUserProfile(User user) async {
-    final userRef = FirebaseDatabase.instance.ref('users/${user.uid}');
-    final snapshot = await userRef.get();
+    final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
+    final snapshot = await userDoc.get();
 
     if (!snapshot.exists) {
-      await userRef.set({
+      await userDoc.set({
         'name': '',
         'username': '',
         'bio': '',
@@ -112,9 +112,9 @@ class AuthGate extends StatelessWidget {
                   return const Center(child: CircularProgressIndicator());
                 }
 
-                final userRef = FirebaseDatabase.instance.ref('users/${user.uid}');
-                return FutureBuilder<DatabaseEvent>(
-                  future: userRef.once(),
+                final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
+                return FutureBuilder<DocumentSnapshot>(
+                  future: userDoc.get(),
                   builder: (context, userSnapshot) {
                     if (userSnapshot.connectionState == ConnectionState.waiting) {
                       return const Center(child: CircularProgressIndicator());
@@ -129,9 +129,9 @@ class AuthGate extends StatelessWidget {
                       );
                     }
 
-                    if (userSnapshot.hasData && userSnapshot.data!.snapshot.exists) {
-                      final data = userSnapshot.data!.snapshot.value;
-                      if (data != null && data is Map) {
+                    if (userSnapshot.hasData && userSnapshot.data!.exists) {
+                      final data = userSnapshot.data!.data() as Map<String, dynamic>?;
+                      if (data != null) {
                         final name = data['name'] as String? ?? '';
                         final username = data['username'] as String? ?? '';
 
