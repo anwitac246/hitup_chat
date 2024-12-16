@@ -1,12 +1,14 @@
+//import 'dart:io';
+
 import 'package:flutter/material.dart';
-import 'package:firebase_database/firebase_database.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:hitup_chat/pages/gemini_api.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:hitup_chat/pages/profile.dart';
 import 'package:intl/intl.dart';
 import 'package:parallax_rain/parallax_rain.dart';
-import 'package:vitality/vitality.dart';
-
+import 'package:file_picker/file_picker.dart';
 
 class Chat extends StatefulWidget {
   const Chat({super.key});
@@ -19,12 +21,12 @@ class _ChatState extends State<Chat> {
   final TextEditingController _searchController = TextEditingController();
   final TextEditingController _messageController = TextEditingController();
   final FirebaseAuth _auth = FirebaseAuth.instance;
-  final databaseRef = FirebaseDatabase.instance.ref();
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   User? _currentUser;
   String _searchQuery = '';
-  DatabaseReference? _selectedUserRef;
-  Map<String, dynamic>? _selectedUserData; 
+  String? _selectedUserId;
+  Map<String, dynamic>? _selectedUserData;
 
   @override
   void initState() {
@@ -32,27 +34,40 @@ class _ChatState extends State<Chat> {
     _currentUser = _auth.currentUser;
   }
 
-  Future<void> _selectUser(DatabaseReference userRef) async {
-    final snapshot = await userRef.get();
-    if (snapshot.exists) {
-      setState(() {
-        _selectedUserRef = userRef;
-        _selectedUserData = Map<String, dynamic>.from(snapshot.value as Map);
-      });
+  Future<void> _selectUser(String userId, Map<String, dynamic> userData) async {
+    setState(() {
+      _selectedUserId = userId;
+      _selectedUserData = userData;
+    });
+  }
+
+  final ScrollController _scrollController =
+      ScrollController(); 
+
+  Future<void> _scrollToBottom() async {
+    if (_scrollController.hasClients) {
+      await Future.delayed(const Duration(
+          milliseconds: 100));
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
     }
   }
 
   Future<void> _sendMessage() async {
-    if (_messageController.text.trim().isEmpty || _selectedUserRef == null) return;
+    if (_messageController.text.trim().isEmpty || _selectedUserId == null)
+      return;
 
     final messageData = {
       'senderId': _currentUser?.uid,
-      'receiverId': _selectedUserRef?.key,
+      'receiverId': _selectedUserId,
       'message': _messageController.text.trim(),
-      'timestamp': DateTime.now().toIso8601String(),
+      'timestamp': FieldValue.serverTimestamp(),
     };
 
-    await databaseRef.child('chats').push().set(messageData);
+    await _firestore.collection('chats').add(messageData);
     _messageController.clear();
   }
 
@@ -110,7 +125,7 @@ class _ChatState extends State<Chat> {
           VerticalDivider(color: Colors.grey[700]),
           Expanded(
             flex: 4,
-            child: _selectedUserRef == null
+            child: _selectedUserId == null
                 ? Center(
                     child: Text(
                       'Select a user to start chatting',
@@ -122,7 +137,7 @@ class _ChatState extends State<Chat> {
           VerticalDivider(color: Colors.grey[700]),
           Expanded(
             flex: 2,
-            child: _selectedUserRef == null
+            child: _selectedUserId == null
                 ? Center(
                     child: Text(
                       'Select a user to view profile',
@@ -140,6 +155,7 @@ class _ChatState extends State<Chat> {
     return Padding(
       padding: const EdgeInsets.all(8.0),
       child: TextField(
+        style: TextStyle(color: Colors.white),
         controller: _searchController,
         onChanged: (value) {
           setState(() {
@@ -163,15 +179,14 @@ class _ChatState extends State<Chat> {
   }
 
   Widget _buildUserList() {
-    final usersRef = databaseRef.child('users');
-    return StreamBuilder<DatabaseEvent>(
-      stream: usersRef.onValue,
+    return StreamBuilder<QuerySnapshot>(
+      stream: _firestore.collection('users').snapshots(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
 
-        if (!snapshot.hasData || snapshot.data!.snapshot.value == null) {
+        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
           return Center(
             child: Text(
               'No users found.',
@@ -180,12 +195,11 @@ class _ChatState extends State<Chat> {
           );
         }
 
-        final usersData = snapshot.data!.snapshot.value as Map? ?? {};
-        final users = usersData.entries.where((userEntry) {
-          final user = userEntry.value;
-          final matchesSearchQuery =
-              _searchQuery.isEmpty || (user['username'] ?? '').toLowerCase().contains(_searchQuery);
-          return matchesSearchQuery;
+        final users = snapshot.data!.docs.where((userDoc) {
+          final user = userDoc.data() as Map<String, dynamic>;
+          final matchesSearchQuery = _searchQuery.isEmpty ||
+              (user['username'] ?? '').toLowerCase().contains(_searchQuery);
+          return matchesSearchQuery && userDoc.id != _currentUser?.uid;
         }).toList();
 
         if (users.isEmpty) {
@@ -200,19 +214,20 @@ class _ChatState extends State<Chat> {
         return ListView.builder(
           itemCount: users.length,
           itemBuilder: (context, index) {
-            final user = users[index];
+            final userDoc = users[index];
+            final user = userDoc.data() as Map<String, dynamic>;
             return ListTile(
               leading: CircleAvatar(
-                backgroundImage: user.value['profilePicture'] != null
-                    ? NetworkImage(user.value['profilePicture'])
+                backgroundImage: user['profilePicture'] != null
+                    ? NetworkImage(user['profilePicture'])
                     : null,
                 backgroundColor: Colors.pink,
               ),
               title: Text(
-                user.value['username'] ?? 'Unknown User',
+                user['username'] ?? 'Unknown User',
                 style: const TextStyle(color: Colors.white),
               ),
-              onTap: () => _selectUser(usersRef.child(user.key)),
+              onTap: () => _selectUser(userDoc.id, user),
             );
           },
         );
@@ -221,164 +236,322 @@ class _ChatState extends State<Chat> {
   }
 
   Widget _buildChatArea() {
-    return Stack(
-      children: [
-        ParallaxRain(
-          dropColors: [
-            Colors.pink,
-            Colors.white.withOpacity(0.8),
-          ],
-          trail: true,
-          dropFallSpeed: 5.0,
-          dropWidth: 2.0,
-          numberOfDrops: 100,
-        ),
-        Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Row(
-                children: [
-                  CircleAvatar(
-                    radius: 20,
-                    backgroundImage: _selectedUserData?['profilePicture'] != null
-                        ? NetworkImage(_selectedUserData!['profilePicture'])
-                        : null,
-                    backgroundColor: Colors.pink,
+  return Stack(
+    children: [
+      ParallaxRain(
+        dropColors: [
+          Colors.pink,
+          Colors.white.withOpacity(0.8),
+        ],
+        trail: true,
+        dropFallSpeed: 5.0,
+        dropWidth: 2.0,
+        numberOfDrops: 100,
+      ),
+      Column(
+        children: [
+          
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+            color: Colors.grey[850],
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 20,
+                  backgroundImage: _selectedUserData?['profilePicture'] != null
+                      ? NetworkImage(_selectedUserData!['profilePicture'])
+                      : null,
+                  backgroundColor: Colors.pink,
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  _selectedUserData?['username'] ?? 'Unknown User',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
                   ),
-                  const SizedBox(width: 8),
-                  Text(
-                    _selectedUserData?['username'] ?? 'Unknown User',
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
-            Expanded(
-              child: StreamBuilder<DatabaseEvent>(
-                stream: databaseRef.child('chats').orderByChild('timestamp').onValue,
-                builder: (context, snapshot) {
-                  if (!snapshot.hasData || snapshot.data!.snapshot.value == null) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
+          ),
+          Expanded(
+            child: StreamBuilder<QuerySnapshot>(
+              stream: FirebaseFirestore.instance
+                  .collection('chats')
+                  .orderBy('timestamp', descending: true) 
+                  .snapshots(),
+              builder: (context, snapshot) {
+                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                  return Center(
+                    child: Text(
+                      'No messages yet.',
+                      style: TextStyle(color: Colors.grey[400]),
+                    ),
+                  );
+                }
 
-                  final messagesData = snapshot.data!.snapshot.value as Map? ?? {};
-                  final messages = messagesData.entries.where((entry) {
-                    final message = entry.value;
-                    return (message['senderId'] == _currentUser?.uid && message['receiverId'] == _selectedUserRef?.key) ||
-                        (message['senderId'] == _selectedUserRef?.key && message['receiverId'] == _currentUser?.uid);
-                  }).toList();
+               
+                final groupedMessages = _groupMessagesByDate(snapshot.data!.docs);
 
-                  messages.sort((a, b) => DateTime.parse(b.value['timestamp']).compareTo(DateTime.parse(a.value['timestamp'])));
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  _scrollToBottom(); 
+                });
 
-                  return ListView.builder(
-                    itemCount: messages.length,
-                    itemBuilder: (context, index) {
-                      final message = messages[messages.length - index - 1].value;
-                      final isSentByMe = message['senderId'] == _currentUser?.uid;
-                      final timestamp = DateTime.parse(message['timestamp']);
-                      final formattedTime = DateFormat('hh:mm a').format(timestamp);
+                return ListView.builder(
+                  controller: _scrollController,
+                  reverse: true,
+                  itemCount: groupedMessages.length,
+                  itemBuilder: (context, index) {
+                    final entry = groupedMessages.entries.toList()[index];
+                    final date = entry.key;
+                    final messages = entry.value;
 
-                      return Row(
-                        mainAxisAlignment: isSentByMe ? MainAxisAlignment.end : MainAxisAlignment.start,
-                        children: [
-                          if (!isSentByMe)
-                            CircleAvatar(
-                              radius: 18,
-                              backgroundImage: _selectedUserData?['profilePicture'] != null
-                                  ? NetworkImage(_selectedUserData!['profilePicture'])
-                                  : null,
-                              backgroundColor: Colors.pink,
-                            ),
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 12.0),
-                            margin: const EdgeInsets.symmetric(vertical: 4.0),
-                            decoration: BoxDecoration(
-                              color: isSentByMe ? Colors.pink : Colors.grey[700],
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: isSentByMe
-                                  ? CrossAxisAlignment.end
-                                  : CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  message['message'] ?? '',
-                                  style: const TextStyle(color: Colors.white),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  formattedTime,
-                                  style: TextStyle(color: Colors.grey[400], fontSize: 10),
-                                ),
-                              ],
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8.0),
+                          child: Center(
+                            child: Text(
+                              DateFormat('EEEE, MMM d').format(date),
+                              style: const TextStyle(
+                                color: Colors.grey,
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                           ),
-                        ],
-                      );
-                    },
-                  );
-                },
-              ),
+                        ),
+                       
+                        ...messages.map((message) {
+                          final messageData = message.data() as Map<String, dynamic>;
+                          final isSentByMe = messageData['senderId'] == _currentUser?.uid;
+                          final timestamp = messageData['timestamp']?.toDate();
+                          final formattedTime = timestamp != null
+                              ? DateFormat('hh:mm a').format(timestamp)
+                              : '';
+
+                          return Row(
+                            mainAxisAlignment: isSentByMe
+                                ? MainAxisAlignment.end
+                                : MainAxisAlignment.start,
+                            children: [
+                              if (!isSentByMe)
+                                CircleAvatar(
+                                  radius: 18,
+                                  backgroundImage:
+                                      _selectedUserData?['profilePicture'] != null
+                                          ? NetworkImage(
+                                              _selectedUserData!['profilePicture'])
+                                          : null,
+                                  backgroundColor: Colors.pink,
+                                ),
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    vertical: 8.0, horizontal: 12.0),
+                                margin: const EdgeInsets.symmetric(vertical: 4.0),
+                                decoration: BoxDecoration(
+                                  color:
+                                      isSentByMe ? Colors.pink : Colors.grey[700],
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: isSentByMe
+                                      ? CrossAxisAlignment.end
+                                      : CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      messageData['message'] ?? '',
+                                      style: const TextStyle(color: Colors.white),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      formattedTime,
+                                      style: TextStyle(
+                                          color: Colors.grey[400], fontSize: 10),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          );
+                        }).toList(),
+                      ],
+                    );
+                  },
+                );
+              },
             ),
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _messageController,
-                      decoration: const InputDecoration(
-                        hintText: 'Type a message...',
-                        border: OutlineInputBorder(),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _messageController,
+                    style: TextStyle(
+                      color: Colors.white,
+                    ),
+                    decoration: InputDecoration(
+                      hintText: 'Type a message...',
+                      hintStyle: TextStyle(color: Colors.grey[400]),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: Colors.pink),
                       ),
-                      style: TextStyle(color: Colors.white),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: Colors.pink),
+                      ),
                     ),
                   ),
+                ),
+                const SizedBox(width: 8),
+                
                   IconButton(
-                    icon: const Icon(Icons.send, color: Colors.pink),
-                    onPressed: _sendMessage,
+                    icon: const Icon(Icons.circle_sharp),
+                    color: Colors.pink,
+                    onPressed: () {
+                      showModalBottomSheet(
+                        context: context,
+                        shape: const RoundedRectangleBorder(
+                          borderRadius:
+                              BorderRadius.vertical(top: Radius.circular(16)),
+                        ),
+                        builder: (context) => SizedBox(
+                          height: MediaQuery.of(context).size.height * 0.6,
+                          child: GeminiApiChat(),
+                        ),
+                      );
+                    },
                   ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
+                  IconButton(
+                    icon: const Icon(Icons.attachment, color: Colors.pink),
+                    onPressed: () async {
+  final result = await FilePicker.platform.pickFiles(
+    type: FileType.any,
+    allowMultiple: true,
+  );
 
-  Widget _buildProfileSection() {
-    if (_selectedUserData == null) {
-      return const Center(
-        child: Text(
-          'Select a user to view profile',
-          style: TextStyle(color: Colors.grey),
-        ),
+  if (result != null && result.files.isNotEmpty) {
+    final fileBytes = result.files.single.bytes;
+    final fileName = result.files.single.name;
+    final fileExtension = result.files.single.extension;
+
+    print('File Name: $fileName');
+    print('File Extension: $fileExtension');
+    print('Bytes Length: ${fileBytes?.length}');
+
+    if (fileBytes != null) {
+      try {
+        final storageRef =
+            FirebaseStorage.instance.ref().child('chat_files/$fileName');
+        final uploadTask = storageRef.putData(fileBytes);
+        uploadTask.snapshotEvents.listen((TaskSnapshot snapshot) {
+    print('Task state: ${snapshot.state}');
+    print('Bytes transferred: ${snapshot.bytesTransferred}');
+  });
+        final snapshot = await uploadTask.whenComplete(() {});
+        final fileUrl = await snapshot.ref.getDownloadURL();
+
+        print('File uploaded successfully: $fileUrl');
+
+       
+        await _firestore.collection('chats').add({
+          'senderId': _currentUser?.uid,
+          'receiverId': _selectedUserId,
+          'fileUrl': fileUrl,
+          'fileName': fileName,
+          'fileType': fileExtension,
+          'timestamp': FieldValue.serverTimestamp(),
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$fileName sent successfully!')),
+        );
+      } catch (e) {
+        print('Error during file upload: $e');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to upload file: $e')),
+        );
+      }
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('File selection failed. Try again.')),
       );
     }
+  } else {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('No file selected')),
+    );
+  }
+},
 
-    final bio = _selectedUserData?['bio'] ?? 'No bio available';
-    final username = _selectedUserData?['username'] ?? 'Unknown User';
-    final profilePicture = _selectedUserData?['profilePicture'];
+                  ),
+                IconButton(
+                  icon: const Icon(Icons.send, color: Colors.pink),
+                  onPressed: () {
+                    _sendMessage();
+                    _scrollToBottom();
+                  },
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    ],
+  );
+}
 
-    return Column(
+
+Map<DateTime, List<QueryDocumentSnapshot>> _groupMessagesByDate(
+    List<QueryDocumentSnapshot> messages) {
+  final Map<DateTime, List<QueryDocumentSnapshot>> groupedMessages = {};
+
+  for (final message in messages) {
+    final timestamp = message['timestamp']?.toDate();
+    if (timestamp == null) continue;
+
+    final date = DateTime(timestamp.year, timestamp.month, timestamp.day);
+
+    if (groupedMessages[date] == null) {
+      groupedMessages[date] = [];
+    }
+    groupedMessages[date]!.add(message);
+  }
+
+  return groupedMessages;
+}
+
+  Widget _buildProfileSection() {
+    return ListView(
+      padding: const EdgeInsets.all(8.0),
+     
       children: [
         CircleAvatar(
-          radius: 40,
-          backgroundImage: profilePicture != null ? NetworkImage(profilePicture) : null,
+          radius: 50,
+          backgroundImage: _selectedUserData?['profilePicture'] != null
+              ? NetworkImage(_selectedUserData!['profilePicture'])
+              : null,
           backgroundColor: Colors.pink,
         ),
-        const SizedBox(height: 8),
-        Text(
-          username,
-          style: const TextStyle(color: Colors.white, fontSize: 20),
+        const SizedBox(height: 16),
+        Center(
+          child: Text(
+            _selectedUserData?['username'] ?? 'Unknown User',
+            style: const TextStyle(
+                fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
+          ),
         ),
         const SizedBox(height: 8),
         Text(
-          bio,
-          style: const TextStyle(color: Colors.grey),
+          _selectedUserData?['bio'] ?? 'No bio available.',
+          style: const TextStyle(fontSize: 16, color: Colors.grey),
           textAlign: TextAlign.center,
         ),
       ],
