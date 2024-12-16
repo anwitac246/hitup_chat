@@ -5,8 +5,8 @@ import 'package:particles_flutter/core/runner.dart';
 import 'package:particles_flutter/painters/circular_painter.dart';
 import 'package:particles_flutter/particles_engine.dart';
 import 'dart:math';
-import 'package:firebase_auth/firebase_auth.dart'; // Add FirebaseAuth for login if needed
-import 'auth_gate.dart'; // Navigation target
+import 'package:firebase_auth/firebase_auth.dart'; 
+import 'auth_gate.dart';
 
 class LoginApp extends StatelessWidget {
   const LoginApp({super.key});
@@ -52,7 +52,7 @@ class CircularParticleScreen extends StatelessWidget {
         Container(
           color: Colors.black,
           child: Particles(
-            awayRadius: 150,
+            awayRadius: 200,
             particles: createParticles(),
             height: screenHeight,
             width: screenWidth,
@@ -93,10 +93,7 @@ class CircularParticleScreen extends StatelessWidget {
                 ),
                 onPressed: () async {
                   try {
-                    // Implement Firebase Authentication if needed
-                    // Example: FirebaseAuth login or other authentication methods
-
-                    // Navigate to AuthGate for login/registration flow
+                    
                     print("Navigating to AuthGate...");
                     Navigator.push(
                       context,
@@ -104,7 +101,7 @@ class CircularParticleScreen extends StatelessWidget {
                     );
                   } catch (e) {
                     print('Login error: $e');
-                    // Optionally show a SnackBar or Dialog for errors
+                    
                   }
                 },
                 icon: const Icon(Icons.login, color: Colors.white),
